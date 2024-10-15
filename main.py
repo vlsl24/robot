@@ -37,8 +37,8 @@ target_value = (line_reflection + background_reflection) * 0.5
 #Abs amount from line reflection -> target and background reflection -> target
 difference = target_value - line_reflection
 
-rotation_speed = 25.0
-drive_speed = 25.0
+rotation_speed = 20.0
+drive_speed = 35.0
 
 #States
 FIND_LINE = 0
@@ -47,9 +47,24 @@ ENTER_PARKING = 2
 EXIT_PARKING = 3
 
 #Functions
-#Returns true if there is something closer than X mm infront of the robot, else false
-def blocked_ahead():
-    return distance_sensor.distance() <= 130
+def cruise_controll():
+    maxDist =200
+    minDist =125
+    diff = maxDist - minDist
+    
+    if (distance_sensor.distance() < maxDist):
+        if (distance_sensor.distance() < minDist):
+            return 0.0
+        percentage = (distance_sensor.distance() - minDist) / diff
+        percentage = percentage ** 0.5
+        
+        return float(percentage)
+
+    return 1.0
+    
+#Returns true if there is something closer than distance mm infront of the robot, else false
+def blocked_ahead(distance):
+    return distance_sensor.distance() <= distance
 
 #Returns true if the sensor reflection is close enough to the line reflection
 def sensor_on_line(sensor:ColorSensor):
@@ -89,41 +104,54 @@ def find_line():
     return FIND_LINE #We should never get here but just go back to find_line if we do
 
 def follow_line():
+    #Find-parking states
+    FIND_FIRST_LINE = 0
+    FIND_SECOND_LINE = 1
+    FIND_BACKGROUND = 2
+
+    find_parking_state = FIND_FIRST_LINE
     while True:
-        if blocked_ahead(): #If something is blocking us, we shouldn't do anything
-            robot.stop()
-            continue
+        cruise_control_percentage = cruise_controll()
 
         rotation_percentage = get_percentage_to_target_reflection(follow_sensor)
 
         if(abs(rotation_percentage) > 0.5): #Large rotation, stop moving forward until we get closer to the line again
             robot.drive(0, rotation_speed * rotation_percentage)
         else:
-            robot.drive(drive_speed, rotation_speed * rotation_percentage) 
+            robot.drive(drive_speed * cruise_control_percentage, rotation_speed * rotation_percentage) 
 
-        if(sensor_on_line(parking_sensor)): #We detected a parking-line with our other sensor
-            return ENTER_PARKING
+        print(find_parking_state)
+        if(find_parking_state == FIND_FIRST_LINE):
+            if(sensor_on_line(parking_sensor)): #We detected a full-parking-line with our other sensor
+                find_parking_state = FIND_BACKGROUND
+        elif(find_parking_state == FIND_BACKGROUND):
+            print(get_percentage_to_target_reflection(parking_sensor))
+            if(get_percentage_to_target_reflection(parking_sensor) > 0.9):
+                find_parking_state = FIND_SECOND_LINE
+        elif(find_parking_state == FIND_SECOND_LINE):
+            if(get_percentage_to_target_reflection(parking_sensor) < 0.7):
+                return ENTER_PARKING
 
     return FIND_LINE #We should never get here but lets just go back to find_line if we do
 
 def enter_parking():
-    robot.stop() #else it would just keep driving with last settings. Just temp
-    while True:
-        #Check if occupied and if we have checked the whole parking space
-        is_occupied = False
-        checked_whole_parkingspot = False
+    robot.drive(drive_speed, 0)
+    wait((20/drive_speed)*1000)
+    robot.stop()
+    left_motor.run_angle(drive_speed , -360)
+    right_motor.run_angle(drive_speed , 0)
+    
+    robot.reset()
+    robot.drive(drive_speed , 0)
+    while robot.distance() < 250:
 
-        if is_occupied: #We detected another robot in the parking spot
-            #Reverse our inputs trying to get in so we're back to the same spot we started at when we entered
-            #If this isn't easy to do, maybe just return FIND_LINE
-            #Maybe set a timer/distance until we can detect parking-lines again?
-            return FOLLOW_LINE
-        elif checked_whole_parkingspot: #We have finished checking the whole parkingspot, it should be available
-            #enter the parkingspot
-            wait(5000) #Wait 5 seconds
+        if blocked_ahead(300):
             return EXIT_PARKING
-        
-    return FIND_LINE #We should never get here but lets just go back to find_line if we do
+            
+    robot.stop()
+    wait(5000)
+
+    return EXIT_PARKING
 
 def exit_parking():
     robot.drive(-drive_speed, 0) #Start backing out of the parking
@@ -138,22 +166,22 @@ def exit_parking():
     return FIND_LINE #We should never get here but lets just go back to find_line if we do
     
 
-state = EXIT_PARKING #We start with finding the line
+state = FOLLOW_LINE #We start with finding the line
 
 # while True:
 #     print(follow_sensor.reflection())
 
 #Main loop, this is what we run all the time
-# while True:
-#     print("Current State:", state)
+while True:
+    print("Current State:", state)
 
-#     if state == FIND_LINE:
-#         state = find_line()
-#     elif state == FOLLOW_LINE:
-#         state = follow_line()
-#     elif state == ENTER_PARKING:
-#         state = enter_parking()
-#     elif state == EXIT_PARKING:
-#         state = exit_parking()
-#     else:
-#         print("Our state value is not defined!")
+    if state == FIND_LINE:
+        state = find_line()
+    elif state == FOLLOW_LINE:
+        state = follow_line()
+    elif state == ENTER_PARKING:
+        state = enter_parking()
+    elif state == EXIT_PARKING:
+        state = exit_parking()
+    else:
+        print("Our state value is not defined!")
