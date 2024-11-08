@@ -17,8 +17,8 @@ right_motor = Motor(Port.C)
 robot = DriveBase(left_motor, right_motor, wheel_diameter=55.5, axle_track=104)
 
 # Sensor definitions
-parking_sensor = ColorSensor(Port.S2) #left
-follow_sensor = ColorSensor(Port.S3) #right
+parking_sensor = ColorSensor(Port.S3) #right
+follow_sensor = ColorSensor(Port.S2) #left
 distance_sensor = UltrasonicSensor(Port.S4) 
 
 """
@@ -28,8 +28,8 @@ Important! The code may not function correctly if the first line from the templa
 # Your code goes here
 
 #Other Variables
-line_reflections = [5, 6]
-background_reflections = [23, 26]
+line_reflections = [7, 9]
+background_reflections = [83, 95]
 
 #Creating target value, this will be the value when the line/background both share the same amount of the sensor
 target_values = [(line_reflections[0] + background_reflections[0]) * 0.5, (line_reflections[1] + background_reflections[1]) * 0.5] 
@@ -74,6 +74,7 @@ def sensor_on_line(sensor:ColorSensor):
 def get_percentage_to_target_reflection(sensor:ColorSensor):
     reflection = sensor.reflection()
 
+    #Get the correct index because the sensors might have different heights or other reason for getting different values from the sensor
     index = 0
     if sensor == parking_sensor:
         index = 1
@@ -84,6 +85,7 @@ def get_percentage_to_target_reflection(sensor:ColorSensor):
     #Convert offset to a value between -1.0 -> 1.0
     percentage = offset_to_target / differences[index]
 
+    #Clamp the value just in case
     if percentage > 1.0:
         percentage = 1.0
     elif percentage < -1.0:
@@ -105,7 +107,7 @@ def find_line():
             if sensor_on_line(follow_sensor):
                 print("Found line")
                 robot.stop()
-                left_motor.run(-100)
+                left_motor.run(100)
                 while get_percentage_to_target_reflection(follow_sensor) < 0: #Try to rotate left until we come back to the background.
                     #This should land us on the correct side of the line
                     pass
@@ -127,21 +129,26 @@ def follow_line():
     while True:
         cruise_control_percentage = cruise_controll()
 
-        rotation_percentage = get_percentage_to_target_reflection(follow_sensor)
+        rotation_percentage = -get_percentage_to_target_reflection(follow_sensor)
 
         abs_rotation = abs(rotation_percentage)
-        if(abs_rotation > 0.9): #Large rotation, stop moving forward until we get closer to the line again
+        if(abs_rotation > 0.5): #Large rotation, stop moving forward until we get closer to the line again
             robot.drive(0, rotation_speed * rotation_percentage * cruise_control_percentage)
         else:
             robot.drive(drive_speed * cruise_control_percentage * (1.0 - abs_rotation), rotation_speed * rotation_percentage) 
 
+        if robot.distance() > 500:
+            find_parking_state = FIND_FIRST_LINE
+
         if(find_parking_state == FIND_FIRST_LINE):
             if(sensor_on_line(parking_sensor)): #We detected a full-parking-line with our other sensor
                 find_parking_state = FIND_BACKGROUND
+                robot.reset()
                 print("Entered FIND_BACKGROUND")
         elif(find_parking_state == FIND_BACKGROUND):
             if(get_percentage_to_target_reflection(parking_sensor) > 0.5):
                 find_parking_state = FIND_SECOND_LINE
+                robot.reset()
                 print("Entered FIND_SECOND_LINE")
         elif(find_parking_state == FIND_SECOND_LINE):
             if(get_percentage_to_target_reflection(parking_sensor) < -0.5):
@@ -153,32 +160,30 @@ def enter_parking():
     robot.drive(drive_speed, 0)
     wait((20/drive_speed)*1000) #Drive 20 mm, to line up better with the parking spot
     robot.stop()
-    left_motor.run_angle(drive_speed , -360)
-    right_motor.run_angle(drive_speed , 0) #Doesnt do anything right now
+    left_motor.run_angle(drive_speed , 0)
+    right_motor.run_angle(drive_speed , -300) #Doesnt do anything right now
     
     robot.reset()
     robot.drive(drive_speed , 0)
     park_distance = 275
-    while robot.distance() < park_distance: #Bör vara runt 250
+    while robot.distance() < park_distance:
         
-        #We might want to use both sensors to check if we are too close to the lines
-        #Or just correct our rotation if it doesn't line up properly
-
+        #Check if we are too close to the parking lines and adjust
         if get_percentage_to_target_reflection(follow_sensor) < 0:
-            robot.stop()
-            right_motor.run_angle(drive_speed, 20)
-            robot.drive(drive_speed, 0)
-
-        if get_percentage_to_target_reflection(parking_sensor) < 0:
             robot.stop()
             left_motor.run_angle(drive_speed, 20)
             robot.drive(drive_speed, 0)
 
-        if blocked_ahead(park_distance - robot.distance()): #Kollar alltid samma distance såhär
+        if get_percentage_to_target_reflection(parking_sensor) < 0:
+            robot.stop()
+            right_motor.run_angle(drive_speed, 20)
+            robot.drive(drive_speed, 0)
+
+        if blocked_ahead(park_distance - robot.distance()): #Will always check the same amount of the parking space from start to finish
             return EXIT_PARKING
             
     robot.stop()
-    wait(5000)
+    wait(5000) # Wait 5 sec
 
     return EXIT_PARKING
 
@@ -190,9 +195,12 @@ def exit_parking():
 
         if(percentage < -0.5): #We should be just reaching the line again since 1.0 == only background, but we don't want to overshoot so we start early
             robot.stop()
+
+            # Here we drive adjust to robot at bit to make sure the parking sensor is on the "correct" side of the line.
             robot.straight(10)
             robot.stop()
-            left_motor.run_angle(100, 45)
+            right_motor.run_angle(100, -45)
+
             return FOLLOW_LINE #Because we are close to the line but not on it, we should immediately rotate right whilst not moving
 
     return FIND_LINE #We should never get here but lets just go back to find_line if we do
