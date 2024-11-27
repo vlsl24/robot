@@ -28,7 +28,7 @@ Important! The code may not function correctly if the first line from the templa
 # Your code goes here
 
 #Parking variables
-parking_spots = 5
+parking_spots = 3
 parking_index = 0
 parking_states = list()
 
@@ -42,7 +42,7 @@ parking_states = [PARKING_NOT_VISISTED] * parking_spots
 
 #Other Variables
 line_reflections = [7, 6]
-background_reflections = [30, 26]
+background_reflections = [95, 87]
 
 #Creating target value, this will be the value when the line/background both share the same amount of the sensor
 target_values = [(line_reflections[0] + background_reflections[0]) * 0.5, (line_reflections[1] + background_reflections[1]) * 0.5] 
@@ -69,7 +69,6 @@ def draw_parking_state(index:int, x:int, y:int, width:int, height:int):
     ev3.screen.draw_text(x, y, text)
 
 def update_screen():
-    ev3.speaker.beep(700, 50)
     ev3.screen.clear()
 
     height_per_entry = round(ev3.screen.height / parking_spots)
@@ -157,6 +156,8 @@ def find_line():
     return FIND_LINE #We should never get here but just go back to find_line if we do
 
 def follow_line():
+    global parking_index
+
     #Find-parking states
     FIND_PARKING_LINE = 0
     LINE_UP_WITH_PARKING = 1
@@ -170,9 +171,19 @@ def follow_line():
 
         if(find_parking_state == FIND_PARKING_LINE):
             if(get_percentage_to_target_reflection(parking_sensor) < -0.5): #We detected a full-parking-line with our other sensor
-                find_parking_state = LINE_UP_WITH_PARKING
-                robot.reset() #To measure distance when lining up.
-                print("Entered LINE_UP_WITH_PARKING")
+                if first_lap or parking_states[parking_index] == PARKING_FREE:
+                    find_parking_state = LINE_UP_WITH_PARKING
+                    robot.reset() #To measure distance when lining up.
+                    print("Entered LINE_UP_WITH_PARKING")
+                else:
+                    # Parking spot busy
+                    ev3.speaker.beep(500, 100)
+                    parking_index += 1
+                    clamp_parking_index()
+                    update_screen()
+
+                    find_parking_state = FIND_BACKGROUND
+                    print("Parking spot busy :(")
         elif find_parking_state == LINE_UP_WITH_PARKING:
             park_distance = 185
             if(robot.distance() > park_distance): #Should be lined up :)
@@ -185,7 +196,7 @@ def follow_line():
 
         abs_rotation = abs(rotation_percentage)
 
-        if(abs_rotation > 0.5): #Large rotation, stop moving forward until we get closer to the line again
+        if(abs_rotation > 0.8): #Large rotation, stop moving forward until we get closer to the line again
             robot.drive(0, rotation_speed * rotation_percentage * cruise_control_percentage)
         else:
             robot.drive(drive_speed * cruise_control_percentage * (1.0 - abs_rotation), rotation_speed * rotation_percentage) 
@@ -217,10 +228,6 @@ def on_found_parking():
             clamp_parking_index()
             rotate_to_parking_spot()
             return ENTER_PARKING
-
-        else:
-            ev3.speaker.beep(500, 100)
-            update_screen()
     return FOLLOW_LINE
 
 def rotate_to_parking_spot():
