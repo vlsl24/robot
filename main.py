@@ -21,12 +21,6 @@ parking_sensor = ColorSensor(Port.S3) #right
 follow_sensor = ColorSensor(Port.S2) #left
 distance_sensor = UltrasonicSensor(Port.S4) 
 
-"""
-Important! The code may not function correctly if the first line from the template is not included.
-"""
-
-# Your code goes here
-
 #Parking variables
 parking_spots = 3
 parking_index = 0
@@ -61,6 +55,7 @@ EXIT_PARKING = 3
 EXIT_PROGRAM = 4
 
 #Functions
+
 #Draw parking states
 def draw_parking_state(index:int, x:int, y:int, width:int, height:int):
     text = str(index + 1) + ". " + parkingstate_to_name(parking_states[index])
@@ -83,6 +78,123 @@ def parkingstate_to_name(parkingstate:int):
         return "[X]"
     elif parkingstate == PARKING_NOT_VISISTED:
         return "[?]"
+
+#States
+
+def find_line():
+    distance_to_drive = 100
+    rotation_index = 0
+    while True:
+        robot.turn(90)
+        robot.stop()
+        robot.reset()
+        robot.drive(drive_speed, 0)
+        
+        while robot.distance() < distance_to_drive:
+            cruise_percentage = cruise_controll()
+            robot.drive(drive_speed * cruise_percentage, 0)
+            if sensor_on_line(follow_sensor):
+                print("Found line")
+                robot.stop()
+                left_motor.run(100)
+                while get_percentage_to_target_reflection(follow_sensor) < 0: #Try to rotate left until we come back to the background.
+                    #This should land us on the correct side of the line
+                    pass
+                return FOLLOW_LINE
+
+        rotation_index += 1
+        if(not rotation_index & 1): #Increases the distance to drive each time we do a 180 spin (2 rotations) and still haven't found the line (bit operator for even nr)
+            distance_to_drive += 50 #This is to expand the 'square' the robot is driving in. This value should probably be something related to the robot size.
+
+    return FIND_LINE #We should never get here but just go back to find_line if we do
+
+def follow_line():
+    global parking_index
+
+    #Find-parking states
+    FIND_PARKING_LINE = 0
+    LINE_UP_WITH_PARKING = 1
+    FIND_BACKGROUND = 2
+
+    find_parking_state = FIND_PARKING_LINE
+    while True:
+        cruise_control_percentage = cruise_controll()
+
+        rotation_percentage = -get_percentage_to_target_reflection(follow_sensor)
+
+        if(find_parking_state == FIND_PARKING_LINE):
+            if(get_percentage_to_target_reflection(parking_sensor) < -0.5): #We detected a parking-line with our other sensor
+                if first_lap or parking_states[parking_index] == PARKING_FREE:
+                    find_parking_state = LINE_UP_WITH_PARKING
+                    robot.reset() #To measure distance when lining up.
+                    print("Entered LINE_UP_WITH_PARKING")
+                else:
+                    # Parking spot busy
+                    ev3.speaker.beep(500, 100)
+                    parking_index += 1
+                    clamp_parking_index()
+                    update_screen()
+
+                    find_parking_state = FIND_BACKGROUND
+        elif find_parking_state == LINE_UP_WITH_PARKING:
+            park_distance = 185
+            if(robot.distance() > park_distance): #Should be lined up :)
+                return on_found_parking()
+            if (robot.distance() > park_distance * 0.8 and rotation_percentage < 0): #Do not rotate after driving 80% the park space
+                rotation_percentage = 0
+        elif(find_parking_state == FIND_BACKGROUND):
+            if(get_percentage_to_target_reflection(parking_sensor) > 0.5):
+                find_parking_state = FIND_PARKING_LINE
+
+        abs_rotation = abs(rotation_percentage)
+
+        if(abs_rotation > 0.8): #Large rotation, stop moving forward until we get closer to the line again
+            robot.drive(0, rotation_speed * rotation_percentage * cruise_control_percentage)
+        else:
+            robot.drive(drive_speed * cruise_control_percentage * (1.0 - abs_rotation), rotation_speed * rotation_percentage) 
+
+
+    def enter_parking():
+    robot.reset()
+    robot.drive(drive_speed , 0)
+    park_distance = 275
+    while robot.distance() < park_distance:
+        
+        #Check if we are too close to the parking lines and adjust
+        if get_percentage_to_target_reflection(follow_sensor) < 0:
+            robot.stop()
+            left_motor.run_angle(drive_speed, 20)
+            robot.drive(drive_speed, 0)
+
+        if get_percentage_to_target_reflection(parking_sensor) < 0:
+            robot.stop()
+            right_motor.run_angle(drive_speed, 20)
+            robot.drive(drive_speed, 0)
+            
+    robot.stop()
+    wait(5000) # Wait 5 sec
+
+    return EXIT_PARKING
+
+def exit_parking():
+    robot.drive(-drive_speed, 0) #Start reversing out of the parking
+
+    while True:
+        percentage = get_percentage_to_target_reflection(follow_sensor)
+
+        if(percentage < -0.5): #We should be just reaching the line again since 1.0 == only background, but we don't want to overshoot so we start early
+            robot.stop()
+
+            # Here we drive adjust to robot at bit to make sure the parking sensor is on the "correct" side of the line.
+            robot.straight(10)
+            robot.stop()
+            right_motor.run_angle(100, 45)
+
+            update_screen()
+            return FOLLOW_LINE #Because we are close to the line but not on it, we should immediately rotate right whilst not moving
+
+
+#Help functions
 
 def cruise_controll():
     maxDist =200
@@ -128,81 +240,6 @@ def get_percentage_to_target_reflection(sensor:ColorSensor):
         percentage = -1.0
     return percentage
 
-def find_line():
-    distance_to_drive = 100
-    rotation_index = 0
-    while True:
-        robot.turn(90)
-        robot.stop()
-        robot.reset()
-        robot.drive(drive_speed, 0)
-        
-        while robot.distance() < distance_to_drive:
-            cruise_percentage = cruise_controll()
-            robot.drive(drive_speed * cruise_percentage, 0)
-            if sensor_on_line(follow_sensor):
-                print("Found line")
-                robot.stop()
-                left_motor.run(100)
-                while get_percentage_to_target_reflection(follow_sensor) < 0: #Try to rotate left until we come back to the background.
-                    #This should land us on the correct side of the line
-                    pass
-                return FOLLOW_LINE
-
-        rotation_index += 1
-        if(not rotation_index & 1): #Increases the distance to drive each time we do a 180 spin (2 rotations) and still haven't found the line
-            distance_to_drive += 50 #This is to expand the 'square' the robot is driving in. This value should probably be something related to the robot size.
-
-    return FIND_LINE #We should never get here but just go back to find_line if we do
-
-def follow_line():
-    global parking_index
-
-    #Find-parking states
-    FIND_PARKING_LINE = 0
-    LINE_UP_WITH_PARKING = 1
-    FIND_BACKGROUND = 2
-
-    find_parking_state = FIND_PARKING_LINE
-    while True:
-        cruise_control_percentage = cruise_controll()
-
-        rotation_percentage = -get_percentage_to_target_reflection(follow_sensor)
-
-        if(find_parking_state == FIND_PARKING_LINE):
-            if(get_percentage_to_target_reflection(parking_sensor) < -0.5): #We detected a full-parking-line with our other sensor
-                if first_lap or parking_states[parking_index] == PARKING_FREE:
-                    find_parking_state = LINE_UP_WITH_PARKING
-                    robot.reset() #To measure distance when lining up.
-                    print("Entered LINE_UP_WITH_PARKING")
-                else:
-                    # Parking spot busy
-                    ev3.speaker.beep(500, 100)
-                    parking_index += 1
-                    clamp_parking_index()
-                    update_screen()
-
-                    find_parking_state = FIND_BACKGROUND
-                    print("Parking spot busy :(")
-        elif find_parking_state == LINE_UP_WITH_PARKING:
-            park_distance = 185
-            if(robot.distance() > park_distance): #Should be lined up :)
-                return on_found_parking()
-            if (robot.distance() > park_distance * 0.8 and rotation_percentage < 0): #Do not rotate after driving half the park space
-                rotation_percentage = 0
-        elif(find_parking_state == FIND_BACKGROUND):
-            if(get_percentage_to_target_reflection(parking_sensor) > 0.5):
-                find_parking_state = FIND_PARKING_LINE
-
-        abs_rotation = abs(rotation_percentage)
-
-        if(abs_rotation > 0.8): #Large rotation, stop moving forward until we get closer to the line again
-            robot.drive(0, rotation_speed * rotation_percentage * cruise_control_percentage)
-        else:
-            robot.drive(drive_speed * cruise_control_percentage * (1.0 - abs_rotation), rotation_speed * rotation_percentage) 
-
-    return FIND_LINE #We should never get here but lets just go back to find_line if we do
-
 def clamp_parking_index():
     global parking_index
     global parking_spots
@@ -224,16 +261,15 @@ def on_found_parking():
         update_first_lap_status()
         return EXIT_PARKING
     else:
-        if parking_states[current_index] == PARKING_FREE:
-            clamp_parking_index()
-            rotate_to_parking_spot()
-            return ENTER_PARKING
+        #The spot is free
+        clamp_parking_index()
+        rotate_to_parking_spot()
+        return ENTER_PARKING
     return FOLLOW_LINE
 
 def rotate_to_parking_spot():
     robot.stop()
-    left_motor.run_angle(drive_speed , 0)
-    right_motor.run_angle(drive_speed , -310) #Doesnt do anything right now
+    right_motor.run_angle(drive_speed , -310)
 
 def update_first_lap_status():
     global first_lap
@@ -244,47 +280,6 @@ def update_first_lap_status():
         if parking_states[i] == PARKING_NOT_VISISTED:
             return
     first_lap = False
-
-def enter_parking():
-    robot.reset()
-    robot.drive(drive_speed , 0)
-    park_distance = 75 #275
-    while robot.distance() < park_distance:
-        
-        #Check if we are too close to the parking lines and adjust
-        if get_percentage_to_target_reflection(follow_sensor) < 0:
-            robot.stop()
-            left_motor.run_angle(drive_speed, 20)
-            robot.drive(drive_speed, 0)
-
-        if get_percentage_to_target_reflection(parking_sensor) < 0:
-            robot.stop()
-            right_motor.run_angle(drive_speed, 20)
-            robot.drive(drive_speed, 0)
-            
-    robot.stop()
-    wait(5000) # Wait 5 sec
-
-    return EXIT_PARKING
-
-def exit_parking():
-    robot.drive(-drive_speed, 0) #Start reversing out of the parking
-
-    while True:
-        percentage = get_percentage_to_target_reflection(follow_sensor)
-
-        if(percentage < -0.5): #We should be just reaching the line again since 1.0 == only background, but we don't want to overshoot so we start early
-            robot.stop()
-
-            # Here we drive adjust to robot at bit to make sure the parking sensor is on the "correct" side of the line.
-            robot.straight(10)
-            robot.stop()
-            right_motor.run_angle(100, 45)
-
-            update_screen()
-            return FOLLOW_LINE #Because we are close to the line but not on it, we should immediately rotate right whilst not moving
-
-    return FIND_LINE #We should never get here but lets just go back to find_line if we do
     
 def get_state_name(state:int):
     if state == FIND_LINE:
@@ -297,12 +292,12 @@ def get_state_name(state:int):
         return "EXIT_PARKING"
     return "UNKNOWN_STATE"
 
+
+#Main program code
+
 state = FOLLOW_LINE #We start with finding the line
-
-# while True:
-#     print(follow_sensor.reflection(), parking_sensor.reflection())
-
 update_screen()
+
 #Main loop, this is what we run all the time
 while state != EXIT_PROGRAM:
     print("Current State:", get_state_name(state))
